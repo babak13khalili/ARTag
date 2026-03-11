@@ -284,15 +284,14 @@
         Welcome to the Virtual Wall Sticky.<br /><br />
         Step back and point your camera toward the wall to view and create new
         stickers.<br /><br />
-        Stickers gradually age over a 30-day cycle and disappear afterward, so
-        be sure to return and observe the process.
+        Stickers gradually age throughout the current month and disappear at the
+        end of the month, so be sure to return and observe the process.
       </p>
       <div id="start-panel">
         <button id="start-btn" type="button">Start</button>
       </div>
     </div>
 
-    <!-- UI PANEL -->
     <div id="main-panel" class="hidden">
       <div id="input-wrapper">
         <input
@@ -320,7 +319,6 @@
       </div>
     </div>
 
-    <!-- AR SCENE -->
     <a-scene
       mindar-image="imageTargetSrc: ./Targets/targets.mind; uiScanning: no; filterMinCF: 0.0001; filterBeta: 0.001; missTolerance: 500; warmupTolerance: 1;"
       vr-mode-ui="enabled: false"
@@ -343,7 +341,6 @@
         orderByChild,
         onChildAdded,
         onChildRemoved,
-        remove,
       } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
       const firebaseConfig = {
@@ -359,21 +356,14 @@
 
       const app = initializeApp(firebaseConfig);
       const db = getDatabase(app);
-      const dbRef = ref(db, "ar_tags");
+      const dbRef = ref(db, "ar_tags_current");
 
-      // -----------------------------
-      // CONFIG
-      // -----------------------------
       const MAX_TAGS = 50;
       const MIN_TAG_SCALE = 0.6;
       const MAX_TAG_SCALE = 1.0;
       const GLOBAL_TAG_SCALE = 0.425;
-
-      const TAG_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
       const AGE_BUCKETS = 6;
-      const AGE_BUCKET_MS = TAG_LIFETIME_MS / AGE_BUCKETS;
 
-      // Smaller texture + smaller card than before
       const TEXTURE_FONT_SIZE = 76;
       const TEXTURE_PAD_X = 44;
       const TEXTURE_PAD_Y = 22;
@@ -397,7 +387,6 @@
         { text: "#00B0FF", bg: "#000000" },
       ];
 
-      // Explicit timestamp ordering
       const tagsQuery = query(
         dbRef,
         orderByChild("createdAt"),
@@ -413,15 +402,12 @@
       const scanOverlay = document.getElementById("scan-overlay");
       const scanStatus = document.getElementById("scan-status");
 
-      const renderedTags = new Map(); // key -> { entity, cardEl, data, createdAt, ageBucket }
-      const textureCache = new Map(); // cache by text|textColor|bgColor|ageBucket
+      const renderedTags = new Map();
+      const textureCache = new Map();
 
       let colorBag = [];
       let isSending = false;
 
-      // -----------------------------
-      // HELPERS
-      // -----------------------------
       const refillColorBag = () => {
         colorBag = [...HIGH_CONTRAST_PAIRS];
         for (let i = colorBag.length - 1; i > 0; i -= 1) {
@@ -438,18 +424,53 @@
 
       const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-      const getAgeMs = (createdAt) => {
-        if (typeof createdAt !== "number" || Number.isNaN(createdAt)) return 0;
-        return Math.max(0, Date.now() - createdAt);
+      const formatStamp = (ms) => {
+        const d = new Date(ms);
+        const time = d
+          .toLocaleString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: true,
+          })
+          .replace(",", "");
+        const date = d.toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "2-digit",
+        });
+        return `${time} ${date}`;
       };
 
-      const getAgeBucket = (createdAt) => {
-        const ageMs = getAgeMs(createdAt);
-        if (ageMs >= TAG_LIFETIME_MS) return AGE_BUCKETS - 1;
-        return clamp(Math.floor(ageMs / AGE_BUCKET_MS), 0, AGE_BUCKETS - 1);
+      const getMonthCycleInfo = () => {
+        const now = new Date();
+        const cycleStart = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          1,
+          0,
+          0,
+          0,
+          0,
+        ).getTime();
+        const cycleEnd = new Date(
+          now.getFullYear(),
+          now.getMonth() + 1,
+          1,
+          0,
+          0,
+          0,
+          0,
+        ).getTime();
+        const cycleLength = cycleEnd - cycleStart;
+        return { cycleStart, cycleEnd, cycleLength };
       };
 
-      const isExpired = (createdAt) => getAgeMs(createdAt) >= TAG_LIFETIME_MS;
+      const getAgeBucket = () => {
+        const { cycleStart, cycleLength } = getMonthCycleInfo();
+        const elapsed = Date.now() - cycleStart;
+        const progress = clamp(elapsed / cycleLength, 0, 0.999999);
+        return clamp(Math.floor(progress * AGE_BUCKETS), 0, AGE_BUCKETS - 1);
+      };
 
       const escapeCachePart = (value) =>
         String(value ?? "").replace(/\|/g, "_");
@@ -477,9 +498,6 @@
         }
       };
 
-      // -----------------------------
-      // TEXTURE GENERATION + CACHE
-      // -----------------------------
       const makeTagTexture = (text, textColor, bgColor, ageBucket = 0) => {
         const content = text || " ";
         const cacheKey = getTextureCacheKey(
@@ -509,18 +527,15 @@
         const ctx = canvas.getContext("2d");
         if (!ctx) return null;
 
-        // Base
         ctx.fillStyle = bgColor;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Text
         ctx.fillStyle = textColor;
         ctx.font = `${TAG_FONT_WEIGHT} ${TEXTURE_FONT_SIZE}px ${TAG_FONT_FAMILY}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText(content, canvas.width / 2, canvas.height / 2);
 
-        // Wear / aging by 6 monthly stages
         const noiseCount = Math.floor(80 + wearFactor * 260);
         for (let i = 0; i < noiseCount; i += 1) {
           const x = Math.random() * canvas.width;
@@ -615,13 +630,10 @@
         return texture;
       };
 
-      // -----------------------------
-      // RENDER / UPDATE
-      // -----------------------------
       const applyTextureToTag = (tagObj) => {
         if (!tagObj || !tagObj.cardEl || !tagObj.data) return;
 
-        const ageBucket = getAgeBucket(tagObj.createdAt);
+        const ageBucket = getAgeBucket();
         if (tagObj.ageBucket === ageBucket) return;
 
         const texture = makeTagTexture(
@@ -647,7 +659,6 @@
 
       const updateAllTagAges = () => {
         for (const [, tagObj] of renderedTags) {
-          if (isExpired(tagObj.createdAt)) continue;
           applyTextureToTag(tagObj);
         }
       };
@@ -657,24 +668,6 @@
         if (!tag) return;
         tag.entity.remove();
         renderedTags.delete(key);
-      };
-
-      const cleanupExpiredTags = async () => {
-        const tasks = [];
-
-        for (const [key, tagObj] of renderedTags) {
-          if (isExpired(tagObj.createdAt)) {
-            tasks.push(
-              remove(ref(db, `ar_tags/${key}`)).catch((err) => {
-                console.warn("Failed to remove expired tag:", key, err);
-              }),
-            );
-          }
-        }
-
-        if (tasks.length) {
-          await Promise.all(tasks);
-        }
       };
 
       const createTagElement = (snapshotKey, data) => {
@@ -687,18 +680,11 @@
         const createdAt =
           typeof data?.createdAt === "number" ? data.createdAt : Date.now();
 
-        if (isExpired(createdAt)) {
-          remove(ref(db, `ar_tags/${snapshotKey}`)).catch((err) => {
-            console.warn("Failed to remove already expired tag:", err);
-          });
-          return;
-        }
-
         const texture = makeTagTexture(
           data?.text || "",
           textColor,
           bgColor,
-          getAgeBucket(createdAt),
+          getAgeBucket(),
         );
 
         const tagEl = document.createElement("a-entity");
@@ -716,8 +702,6 @@
         cardEl.setAttribute("width", `${cardWidth}`);
         cardEl.setAttribute("height", `${CARD_HEIGHT}`);
         if (texture) cardEl.setAttribute("src", texture.url);
-
-        // front only = sticker/card facing one direction only
         cardEl.setAttribute(
           "material",
           "shader: flat; side: front; transparent: false; opacity: 1;",
@@ -734,12 +718,13 @@
           ageBucket: -1,
         });
 
+        console.log(
+          `Loaded tag: "${data?.text || ""}" — ${formatStamp(createdAt)}`,
+        );
+
         applyTextureToTag(renderedTags.get(snapshotKey));
       };
 
-      // -----------------------------
-      // INPUT / SUBMIT
-      // -----------------------------
       const sendTag = async () => {
         const val = input.value.trim().toUpperCase();
         if (!val || isSending) return;
@@ -748,13 +733,14 @@
         submitBtn.disabled = true;
 
         const { textColor, bgColor } = getRandomColorPair();
+        const createdAt = Date.now();
 
         try {
           await push(dbRef, {
             text: val,
             color: textColor,
             bgColor,
-            createdAt: Date.now(),
+            createdAt,
             pos: {
               x: (Math.random() - 0.5) * 0.62,
               y: (Math.random() - 0.5) * 0.56,
@@ -769,6 +755,7 @@
             },
           });
 
+          console.log(`Submitted tag: "${val}" — ${formatStamp(createdAt)}`);
           input.value = "";
         } catch (err) {
           console.error("Failed to send tag:", err);
@@ -787,7 +774,6 @@
         }
       });
 
-      // Additional mobile focus protection
       input.addEventListener("focus", () => {
         window.scrollTo(0, 0);
       });
@@ -806,6 +792,7 @@
       };
 
       startBtn.addEventListener("click", startExperience);
+
       anchor.addEventListener("targetFound", () => {
         setTrackingState(true);
       });
@@ -814,9 +801,6 @@
         setTrackingState(false);
       });
 
-      // -----------------------------
-      // FIREBASE LIVE EVENTS
-      // -----------------------------
       const init = async () => {
         await fontReady();
 
@@ -830,20 +814,10 @@
         });
 
         updateAllTagAges();
-        cleanupExpiredTags();
 
-        // Update age stage every minute so tags move through the 6 monthly stages
         setInterval(() => {
           updateAllTagAges();
         }, 60 * 1000);
-
-        // Clean expired items from DB every hour
-        setInterval(
-          () => {
-            cleanupExpiredTags();
-          },
-          60 * 60 * 1000,
-        );
       };
 
       init();
