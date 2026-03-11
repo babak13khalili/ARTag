@@ -734,6 +734,7 @@
 
         const { textColor, bgColor } = getRandomColorPair();
         const createdAt = Date.now();
+        const createdAtLabel = formatStamp(createdAt);
 
         try {
           await push(dbRef, {
@@ -741,6 +742,7 @@
             color: textColor,
             bgColor,
             createdAt,
+            createdAtLabel,
             pos: {
               x: (Math.random() - 0.5) * 0.62,
               y: (Math.random() - 0.5) * 0.56,
